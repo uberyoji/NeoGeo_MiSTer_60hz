@@ -1,0 +1,96 @@
+name: Build NeoGeo_MiSTer_60hz
+on:
+  push:
+    branches-ignore:
+      - master # Don't want CI/CD on master branch
+env:
+  PROJECT_NAME: NeoGeo60hz
+  REVISION_NAME: NeoGeo
+
+jobs:
+  setup:
+    runs-on: ubuntu-latest
+    
+    outputs:
+      short_sha: ${{ steps.vars.outputs.short_sha }}
+      build_date: ${{ steps.vars.outputs.build_date }}
+    steps:
+      - id: vars
+        run: |
+          echo "short_sha=${GITHUB_SHA::7}" >> $GITHUB_OUTPUT
+          echo "build_date=$(date +'%Y%m%d')" >> $GITHUB_OUTPUT
+  build-rbf:
+    needs: setup
+    runs-on: ubuntu-latest
+    env:
+      # Inject the outputs back into the environment for this job
+      SHORT_SHA: ${{ needs.setup.outputs.short_sha }}
+      BUILD_DATE: ${{ needs.setup.outputs.build_date }}
+    steps:
+      - run: echo "Building $PROJECT_NAME_$BUILD_DATE ($SHORT_SHA)"
+        
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - name: Initialize Environment Variables        
+        run: |
+          echo "SHORT_SHA=${GITHUB_SHA::7}" >> $GITHUB_ENV
+          echo "BUILD_DATE=$(date +'%Y%m%d')" >> $GITHUB_ENV
+
+      - name: Full Quartus Compilation
+        # We run the Docker command manually so it only affects this step
+        run: |
+          docker run --rm \
+            -v ${{ github.workspace }}:/work \
+            -w /work \
+            theypsilon/quartus-lite-c5:17.0 \
+            sh -c "quartus_sh --flow compile NeoGeo.qpf && \
+                   quartus_cpf -c -o bitstream_compression=on \
+                   output_files/${{ env.REVISION_NAME }}.sof \
+                   output_files/${{ env.PROJECT_NAME }}_${{ env.BUILD_DATE }}.rbf"
+
+      - name: Upload DE10-Nano Binary
+        # Now this runs on the host ubuntu-latest, NOT inside the old container
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.PROJECT_NAME }}_${{ env.BUILD_DATE }}
+          path: output_files/${{ env.PROJECT_NAME }}_${{ env.BUILD_DATE }}.rbf
+
+  publish_release:
+    needs: [setup, build-rbf]    
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+    env:
+      SHORT_SHA: ${{ needs.setup.outputs.short_sha }}
+      BUILD_DATE: ${{ needs.setup.outputs.build_date }}
+    steps:
+      - run: echo "Releasing $PROJECT_NAME_$BUILD_DATE ($SHORT_SHA)"
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+      - name: Initialize Environment Variables        
+        run: |
+          echo "SHORT_SHA=${GITHUB_SHA::7}" >> $GITHUB_ENV
+          echo "BUILD_DATE=$(date +'%Y%m%d')" >> $GITHUB_ENV
+      - name: Download compiled rbf
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.PROJECT_NAME }}_${{ env.BUILD_DATE }}
+          path: releases
+      - name: Prepare JSON and Release
+        working-directory: ./releases
+        run:
+          python3 make_db.py ${{ env.PROJECT_NAME }}_${{ env.BUILD_DATE }}.rbf
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ github.run_number }} # Or a manual versioning scheme
+          files: |
+            releases/${{ env.PROJECT_NAME }}_${{ env.BUILD_DATE }}.rbf
+            releases/uberyoji_neogeo_mister_60hz.json
+          generate_release_notes: true
+          
