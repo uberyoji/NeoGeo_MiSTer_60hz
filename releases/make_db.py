@@ -33,10 +33,18 @@ def get_file_props( entry ):
         return file_entry.format( pathname, hashlib.md5(open(fullname,'rb').read()).hexdigest(), os.path.getsize(fullname), "{}{}".format( db_url, filename ) )
     else:
         print( "{} not found".format(filename) )
-        return ""
+        sys.exit(1) # error
+
+import sys
+arg_count = len(sys.argv)
+if arg_count == 2:
+    binary_name = sys.argv[1]
+else:
+    print("Invalid amount of arguments.")
+    sys.exit(1) # error
 
 flist = [
-    ("_Console/NeoGeo60hz_20260404.rbf","NeoGeo60hz_20260404.rbf")      # mister path+file, file
+    (f"_Console/{binary_name}",f"{binary_name}")      # mister path+file, file
 ]
 
 def validate(text):
@@ -83,5 +91,7 @@ if validate(json_content):
     json_file.flush()
     json_file.close()
     print('Done')
+    sys.exit(0) # success
 else:
-    print('Something went wrong.')
+    print('Something went wrong. Could not validate json.')
+    sys.exit(1) # error
