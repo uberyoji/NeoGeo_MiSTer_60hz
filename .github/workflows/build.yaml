@@ -79,7 +79,7 @@ jobs:
       - name: Download compiled rbf
         uses: actions/download-artifact@v4
         with:
-          name: ${{ env.PROJECT_NAME }}_${{ env.BUILD_DATE }}.rbf
+          name: ${{ env.PROJECT_NAME }}_${{ env.BUILD_DATE }}
           path: releases
       - name: Prepare JSON and Release
         working-directory: ./releases
