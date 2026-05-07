@@ -85,12 +85,10 @@ jobs:
         working-directory: ./releases
         run:
           python3 make_db.py ${{ env.PROJECT_NAME }}_${{ env.BUILD_DATE }}.rbf
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+      - name: Commit JSON and RBF back to repository
+        uses: stefanzweifel/git-auto-commit-action@v7
         with:
-          tag_name: v${{ github.run_number }} # Or a manual versioning scheme
-          files: |
-            releases/${{ env.PROJECT_NAME }}_${{ env.BUILD_DATE }}.rbf
-            releases/uberyoji_neogeo_mister_60hz.json
-          generate_release_notes: true
-          
+          commit_message: "Update release JSON [skip ci]"
+          file_pattern: 'releases/uberyoji_neogeo_mister_60hz.json releases/${{ env.PROJECT_NAME }}_${{ env.BUILD_DATE }}.rbf'
+          # Use the default GITHUB_TOKEN to prevent re-triggering
+          repository: .

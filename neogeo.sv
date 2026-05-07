@@ -396,7 +396,7 @@ always @(posedge CLK_50M) begin
 				end
 			5: begin
 					cfg_address <= 7;
-					cfg_data <= sys_mvs_r ? 3148288251 : 3148288251;
+					cfg_data <= sys_mvs_r ? 3148288251 : 3148288251; 
 					cfg_write <= 1;
 				end
 			7: begin
@@ -408,21 +408,22 @@ always @(posedge CLK_50M) begin
 	end
 end
 
-// The watchdog should output nRESET but it makes video sync stop for a moment, so the
-// MiSTer OSD jumps around. Provide an indication for devs that a watchdog reset happened ?
-
 reg [14:0] TRASH_ADDR;
 reg SYSTEM_TYPE, SYSTEM_CD_TYPE;
 
-reg nRESET;
+reg nRESET_CORE;
 always @(posedge CLK_48M) begin
 	reg rst_n;
+	reg got_rom_write = 0;
 
-	nRESET <= rst_n;
+	if (RESET) got_rom_write <= 0;
+	if (ioctl_download & ioctl_wr) got_rom_write <= 1;
+
+	nRESET_CORE <= rst_n;
 	rst_n <= &TRASH_ADDR;
 	if(CLK_EN_24M_N && ~&TRASH_ADDR) TRASH_ADDR <= TRASH_ADDR + 1'b1;
 
-	if (status[0] | status[14] | buttons[1] | bk_loading | RESET) begin
+	if (status[0] | status[14] | buttons[1] | bk_loading | RESET | ~got_rom_write) begin
 		TRASH_ADDR <= 0;
 		SYSTEM_TYPE <= status[1];	// Latch the system type on reset
 		SYSTEM_CD_TYPE <= status[2];
@@ -434,8 +435,8 @@ always @(posedge CLK_48M) begin
 	integer timeout = 0;
 	reg     last_rst = 0;
 
-	if (RESET) last_rst = 0;
-	if (status[0]) last_rst = 1;
+	if (RESET) last_rst <= 0;
+	if (status[0]) last_rst <= 1;
 
 	if (last_rst & ~status[0]) begin
 		osd_btn <= 0;
@@ -560,7 +561,7 @@ reg  [31:0] cfg = 0;
 wire [15:0] snd_right;
 wire [15:0] snd_left;
 
-wire nRESETP, nSYSTEM, CARD_WE, SHADOW, nVEC, nREGEN, nSRAMWEN, PALBNK;
+wire nRESET, nRESETP, nSYSTEM, CARD_WE, SHADOW, nVEC, nREGEN, nSRAMWEN, PALBNK;
 wire CD_nRESET_Z80;
 
 // Clocks
@@ -1288,7 +1289,7 @@ cpu_68k M68KCPU(
 	.CLK(CLK_48M),
 	.CLK_EN_68K_P(CLK_EN_68K_P),
 	.CLK_EN_68K_N(CLK_EN_68K_N),
-	.nRESET(nRESET_WD),
+	.nRESET(nRESET),
 	.M68K_ADDR(M68K_ADDR),
 	.FX68K_DATAIN(FX68K_DATAIN), .FX68K_DATAOUT(FX68K_DATAOUT),
 	.nLDS(nLDS), .nUDS(nUDS), .nAS(nAS), .M68K_RW(M68K_RW),
@@ -1335,7 +1336,7 @@ dpram #(15) WRAML(
 	.clock_b(CLK_48M),
 	.address_b(TRASH_ADDR),
 	.data_b(TRASH_ADDR[7:0]),
-	.wren_b(~nRESET)
+	.wren_b(~nRESET_CORE)
 );
 
 dpram #(15) WRAMU(
@@ -1348,7 +1349,7 @@ dpram #(15) WRAMU(
 	.clock_b(CLK_48M),
 	.address_b(TRASH_ADDR),
 	.data_b(TRASH_ADDR[7:0]),
-	.wren_b(~nRESET)
+	.wren_b(~nRESET_CORE)
 );
 
 wire [23:0] P2ROM_ADDR_PVC, P2ROM_ADDR_SMA;
@@ -1658,24 +1659,32 @@ neo_c1 C1(
 	.SYSTEM_TYPE({SYSTEM_CDx, SYSTEM_MVS})
 );
 
-reg       use_sp;
-reg [6:0] sp0, sp1;
+reg       use_sp = 0;
+reg [6:0] sp0 = 0, sp1 = 0;
 always @(posedge clk_sys) begin
 	reg old_sp0, old_sp1, old_ms;
+	reg latch_done = 0, ms_filtered = 0;
 
 	old_sp0 <= spinner_0[8];
-	if(old_sp0 ^ spinner_0[8]) sp0 <= sp0 - spinner_0[6:0];
+	if(latch_done && (old_sp0 ^ spinner_0[8])) sp0 <= sp0 - spinner_0[6:0];
 	
+	// Main fires a single mouse event on cold boot in input.cpp in input_notify_mode()
+	// Filter this event once to prevent accidental latching of use_sp on cold boot
 	old_ms <= ps2_mouse[24];
-	if(old_ms ^ ps2_mouse[24]) sp0 <= sp0 - ps2_mouse[14:8];
+	if(latch_done && (old_ms ^ ps2_mouse[24])) begin
+		ms_filtered <= 1;
+		if (ms_filtered) sp0 <= sp0 - ps2_mouse[14:8];
+	end
 
 	old_sp1 <= spinner_1[8];
-	if(old_sp1 ^ spinner_1[8]) sp1 <= sp1 - spinner_1[6:0];
+	if(latch_done && (old_sp1 ^ spinner_1[8])) sp1 <= sp1 - spinner_1[6:0];
+
+	latch_done <= 1;
 
 	if(status[42]) use_sp <= 1;
 	else if(status[41]) use_sp <= 0;
-	else begin
-		if((old_sp0 ^ spinner_0[8]) || (old_sp1 ^ spinner_1[8]) || (old_ms ^ ps2_mouse[24])) use_sp <= 1;
+	else if(latch_done) begin
+		if((old_sp0 ^ spinner_0[8]) || (old_sp1 ^ spinner_1[8]) || (ms_filtered && (old_ms ^ ps2_mouse[24]))) use_sp <= 1;
 		if(joystick_0[3:0] || joystick_1[3:0]) use_sp <= 0;
 	end
 end
@@ -1769,7 +1778,12 @@ always @(posedge DDRAM_CLK) begin
 	old_rd <= z80_rom_rd;
 	if(old_rd == z80_rom_rd) old_rd1 <= old_rd;
 
-	if(~old_rd1 & old_rd) z80rd_req <= ~z80rd_req;
+	// nRESET is used here because otherwise z80rd_req is toggled at core boot
+	// which causes problems with DDRAM. (Z80_nSDRD is probably low for a few DDRAM_CLK
+	// cycles at core boot).
+	// If the core is loaded with SignalTap then DDRAM is stuck at waiting for
+	// DDRAM_DOUT_READY to go high which does not happen.
+	if(~old_rd1 & old_rd & nRESET) z80rd_req <= ~z80rd_req;
 end
 
 wire Z80_nWAIT = (z80rd_req == z80rd_ack);
@@ -1911,6 +1925,8 @@ reg ddr_we_byte;
 ddram DDRAM(
 	.*,
 	
+	.cache_reset(~nRESET),
+
 	.wraddr(ddr_waddr),
 	.din(ddr_wr_din),
 	.we_req(adpcm_wr),
@@ -2116,7 +2132,6 @@ lspc2_a2_sync	LSPC(
 	.FIXMAP_ADDR(FIXMAP_ADDR)	// Extracted for NEO-CMC
 );
 
-wire nRESET_WD;
 wire DOGE = SYSTEM_CDx ? ~CD_UPLOAD_EN : 1'b1; // UPLOAD_EN disables Watchdog?
 
 neo_b1 B1(
@@ -2135,8 +2150,8 @@ neo_b1 B1(
 	.PA(PAL_RAM_ADDR),
 	.EN_FIX(FIX_EN),
 	.DOGE(DOGE),
-	.nRST(nRESET),
-	.nRESET(nRESET_WD)
+	.nRST(nRESET_CORE),
+	.nRESET(nRESET)
 );
 
 spram #(13,16) PALRAM(
